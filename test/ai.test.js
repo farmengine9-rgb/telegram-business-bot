@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {createStore} from '../src/store.js';
+import {addPhase4} from '../src/phase4.js';
+import {liveCatalog,formatCatalog,generateAI,aiInstructions} from '../src/ai.js';
+const make=async()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'phase7-ai-'));const store=addPhase4(await createStore(path.join(dir,'business.sqlite')));return {store,cleanup:()=>{store.close();fs.rmSync(dir,{recursive:true,force:true});}}};
+test('AI catalog reflects actual active products and current stock',async()=>{const {store,cleanup}=await make();try{const id=store.saveProduct({name:'T-Shirt',price:'8500',description:'Cotton',active:true});store.saveProduct({name:'Hidden',price:'4',active:false});assert.equal(liveCatalog(store)[0].stock,null);store.adjustStock(id,3,'Initial restock');assert.equal(liveCatalog(store)[0].stock,3);store.adjustStock(id,-3,'Sold');assert.match(formatCatalog(liveCatalog(store)),/Out of stock/);assert.equal(liveCatalog(store).length,1);}finally{cleanup();}});
+test('AI preview includes no other customer order records',async()=>{const {store,cleanup}=await make();try{store.saveOrder({chat_id:'111',product:'Private box',quantity:2,status:'processing'});store.saveOrder({chat_id:'222',product:'Secret bundle',quantity:1,status:'confirmed'});let captured;const client={chat:{completions:{create:async payload=>{captured=payload;return {choices:[{message:{content:'Pending with staff'}}]};}}}};const answer=await generateAI(store,{name:'Shop'},client,'mock','Where is my order?',{chatId:'111'});assert.equal(answer,'Pending with staff');const prompt=captured.messages[0].content;assert.match(prompt,/Private box/);assert.doesNotMatch(prompt,/Secret bundle/);assert.equal(captured.messages.at(-1).content,'Where is my order?');}finally{cleanup();}});
+test('AI preview has no customer order access and rules prohibit fake confirmation',async()=>{const {store,cleanup}=await make();try{store.saveOrder({chat_id:'111',product:'Private box',quantity:2});const prompt=aiInstructions({name:'Shop'},liveCatalog(store),'owner guidance',[]);assert.doesNotMatch(prompt,/Private box/);assert.match(prompt,/Never invent/);}finally{cleanup();}});

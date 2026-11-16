@@ -1,0 +1,8 @@
+{
+  "name": "Example Business",
+  "description": "A friendly local business offering quality products and services.",
+  "contact": "Contact the team using /human to request an agent.",
+  "hours": "Monday to Saturday, 9 AM - 6 PM",
+  "policies": "Orders and delivery dates must be confirmed by staff. Never promise stock, payment, or delivery without confirmation.",
+  "faq": "Customers can ask about products, prices, business hours, and order enquiries."
+}

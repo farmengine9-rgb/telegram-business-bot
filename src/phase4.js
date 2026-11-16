@@ -1,0 +1,35 @@
+import crypto from 'node:crypto';
+
+const stamp=()=>new Date().toISOString();
+const bounded=(v,n=1000)=>String(v??'').trim().slice(0,n);
+const integer=(v,min,max)=>{const n=Number(v);if(!Number.isSafeInteger(n)||n<min||n>max)throw Error(`Expected integer from ${min} to ${max}`);return n;};
+const emailOK=v=>typeof v==='string'&&/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)&&v.length<=254;
+export function addPhase4(store){
+  for(const sql of [
+    `CREATE TABLE IF NOT EXISTS inventory (product_id INTEGER PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0 CHECK(quantity>=0), reorder_level INTEGER NOT NULL DEFAULT 5 CHECK(reorder_level>=0), updated_at TEXT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS stock_movements (id INTEGER PRIMARY KEY AUTOINCREMENT,product_id INTEGER NOT NULL,delta INTEGER NOT NULL,reason TEXT NOT NULL,created_at TEXT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS payments (id INTEGER PRIMARY KEY AUTOINCREMENT,order_id INTEGER NOT NULL,reference TEXT NOT NULL UNIQUE,email TEXT NOT NULL,amount_kobo INTEGER NOT NULL CHECK(amount_kobo>0),currency TEXT NOT NULL DEFAULT 'NGN',status TEXT NOT NULL DEFAULT 'pending',authorization_url TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,verified_at TEXT)`,
+    `CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id)`,
+    `CREATE TABLE IF NOT EXISTS followups (id INTEGER PRIMARY KEY AUTOINCREMENT,chat_id TEXT NOT NULL,message TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'draft',created_at TEXT NOT NULL,sent_at TEXT)`,
+    `CREATE TABLE IF NOT EXISTS consent (chat_id TEXT PRIMARY KEY,opted_in INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL)`
+  ])store.run(sql);
+  const listInventory=()=>store.all(`SELECT p.id,p.name,p.price,p.active,COALESCE(i.quantity,0) AS quantity,COALESCE(i.reorder_level,5) AS reorder_level FROM products p LEFT JOIN inventory i ON p.id=i.product_id ORDER BY p.id DESC`);
+  function adjustStock(productId,delta,reason,reorderLevel){const id=integer(Number(productId),1,2147483647);const change=integer(Number(delta),-1000000,1000000);const product=store.one('SELECT id FROM products WHERE id=?',[id]);if(!product)throw Error('Product does not exist');let old=store.one('SELECT quantity,reorder_level FROM inventory WHERE product_id=?',[id]);let min=old?.reorder_level??5;if(reorderLevel!==undefined)min=integer(Number(reorderLevel),0,1000000);const amount=(old?.quantity??0)+change;if(amount<0)throw Error('Insufficient recorded stock');const note=bounded(reason,250);if(!note)throw Error('Stock adjustment reason is required');store.run(`INSERT INTO inventory(product_id,quantity,reorder_level,updated_at) VALUES(?,?,?,?) ON CONFLICT(product_id) DO UPDATE SET quantity=excluded.quantity,reorder_level=excluded.reorder_level,updated_at=excluded.updated_at`,[id,amount,min,stamp()]);if(change!==0)store.run('INSERT INTO stock_movements(product_id,delta,reason,created_at) VALUES(?,?,?,?)',[id,change,note,stamp()]);return amount;}
+  const stockMovements=()=>store.all('SELECT m.*,p.name AS product_name FROM stock_movements m LEFT JOIN products p ON p.id=m.product_id ORDER BY m.id DESC LIMIT 100');
+  const listPayments=()=>store.all('SELECT * FROM payments ORDER BY id DESC LIMIT 300');
+  function createPayment(orderId,email,amountKobo,reference){const id=integer(Number(orderId),1,2147483647);if(!store.getOrder(id))throw Error('Order not found');if(!emailOK(email))throw Error('Valid customer email is required');const amount=integer(Number(amountKobo),100,100000000000);const ref=bounded(reference,90);if(!/^[a-zA-Z0-9.=-]+$/.test(ref))throw Error('Invalid reference');return store.run(`INSERT INTO payments(order_id,reference,email,amount_kobo,status,created_at) VALUES(?,?,?,?,'pending',?)`,[id,ref,email,amount,stamp()]);}
+  function setCheckout(reference,url){if(!/^https:\/\/checkout\.paystack\.com\/[\w-]+$/.test(url))throw Error('Unexpected checkout URL');store.run('UPDATE payments SET authorization_url=? WHERE reference=?',[url,reference]);}
+  function getPayment(reference){return store.one('SELECT * FROM payments WHERE reference=?',[reference]);}
+  function reconcilePayment(reference,data){const p=getPayment(reference);if(!p)throw Error('Unknown payment reference');if(data.reference!==reference||data.currency!=='NGN'||Number(data.amount)!==p.amount_kobo)throw Error('Payment reference, currency or amount mismatch');const verified=data.status==='success'?'paid':data.status==='failed'?'failed':'pending';if(p.status==='paid'&&verified!=='paid')return 'paid';store.run('UPDATE payments SET status=?,verified_at=? WHERE reference=?',[verified,verified==='paid'?stamp():null,reference]);return verified;}
+  function reports(){const totals=store.one(`SELECT COUNT(*) AS count,COALESCE(SUM(amount_kobo),0) AS kobo FROM payments WHERE status='paid'`);return {verifiedPayments:Number(totals.count),verifiedRevenueKobo:Number(totals.kobo),ordersByStatus:store.all('SELECT status,COUNT(*) AS count FROM orders GROUP BY status'),lowStock:listInventory().filter(i=>i.active&&i.quantity<=i.reorder_level),recentPayments:listPayments().slice(0,10)};}
+  function consent(chatId,opted){store.run(`INSERT INTO consent(chat_id,opted_in,updated_at) VALUES(?,?,?) ON CONFLICT(chat_id) DO UPDATE SET opted_in=excluded.opted_in,updated_at=excluded.updated_at`,[String(chatId),opted?1:0,stamp()]);}
+  const hasConsent=chatId=>Boolean(store.one('SELECT opted_in FROM consent WHERE chat_id=?',[String(chatId)])?.opted_in);
+  function createFollowup(chatId,message){const id=String(chatId);if(!store.one('SELECT chat_id FROM customers WHERE chat_id=?',[id]))throw Error('Customer not found');if(!hasConsent(id))throw Error('Customer has not opted in to follow-ups');const clean=bounded(message,1500);if(!clean)throw Error('Follow-up message required');return store.run(`INSERT INTO followups(chat_id,message,status,created_at) VALUES(?,?,'draft',?)`,[id,clean,stamp()]);}
+  const listFollowups=()=>store.all('SELECT * FROM followups ORDER BY id DESC LIMIT 300');
+  function getFollowup(id){return store.one('SELECT * FROM followups WHERE id=?',[integer(Number(id),1,2147483647)]);}
+  function markFollowup(id){store.run(`UPDATE followups SET status='sent',sent_at=? WHERE id=? AND status='draft'`,[stamp(),Number(id)]);}
+  return Object.assign(store,{listInventory,adjustStock,stockMovements,listPayments,createPayment,setCheckout,getPayment,reconcilePayment,reports,consent,hasConsent,createFollowup,listFollowups,getFollowup,markFollowup});
+}
+
+export async function paystackRequest(secret,method,endpoint,body,request=fetch){const r=await request('https://api.paystack.co'+endpoint,{method,headers:{Authorization:'Bearer '+secret,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(20000)});const d=await r.json();if(!r.ok||!d.status)throw Error('Paystack request failed: '+(d.message||r.status));return d.data;}
+export function paystackSignatureValid(secret,raw,signature){if(!/^[a-f0-9]{128}$/i.test(signature||''))return false;const expected=crypto.createHmac('sha512',secret).update(raw).digest();return crypto.timingSafeEqual(expected,Buffer.from(signature,'hex'));}
