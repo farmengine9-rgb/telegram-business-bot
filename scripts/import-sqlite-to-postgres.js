@@ -12,6 +12,8 @@
 import 'dotenv/config';
 import {DatabaseSync} from 'node:sqlite';
 import {existsSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import pg from 'pg';
 import {resolveDatabaseUrl} from '../src/database-url.js';
 
@@ -87,6 +89,6 @@ async function importData(){
     sqlite.close();
   }
 }
-if(process.argv[1] && import.meta.url === new URL('file://'+process.argv[1].replaceAll('\\','/')).href){
+if(process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href){
   importData().catch(err=>{console.error('Data import cancelled:',err.message);process.exitCode=1;});
 }
