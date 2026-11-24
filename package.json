@@ -10,7 +10,8 @@
     "start": "node src/index.js",
     "test": "node --test",
     "check": "node --check src/index.js && node --check src/server.js && node --check src/store.js && node --check src/bot.js && node --check src/orderflow.js && node --check src/phase4.js && node --check src/siteconfig.js && node --check src/pos.js && node --check src/ai.js && node --check pos-public/app.js && node --check site-public/site.js && node --check admin-public/app.js",
-    "db:migrate": "node scripts/migrate-postgres.js"
+    "db:migrate": "node scripts/migrate-postgres.js",
+    "db:import-sqlite": "node scripts/import-sqlite-to-postgres.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
