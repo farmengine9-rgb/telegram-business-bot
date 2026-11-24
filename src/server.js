@@ -188,3 +188,30 @@ export function createServer(store,bot,env=process.env){
   app.use((err,req,res,next)=>{console.error('Dashboard request failed:',err.message);fail(res,500,'Unexpected server error');});
   return app;
 }
+
+/*
+ * Vercel migration entry point.
+ *
+ * Vercel auto-detects src/server.js and requires a default-exported Express
+ * application. The existing createServer(store,bot) remains available for the
+ * local Node.js application and the tests.
+ *
+ * IMPORTANT: The current persistence layer uses local SQLite files, so
+ * starting it inside a serverless function risks ephemeral data and lost
+ * inventory/order writes. Until the PostgreSQL adapter is implemented, this
+ * default export deliberately responds with 503 rather than initializing a
+ * local database or starting Telegram long polling.
+ */
+const migrationApp = express();
+migrationApp.disable('x-powered-by');
+migrationApp.get('/healthz', (req, res) =>
+  res.status(200).json({status:'migration_pending',database:'not_configured'})
+);
+migrationApp.use((req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.status(503).json({
+    error:'Migration in progress',
+    message:'Persistent database migration is required before this service can accept requests.'
+  });
+});
+export default migrationApp;
