@@ -44,6 +44,30 @@ export function createServer(store,bot,env=process.env){
     res.set('Cache-Control','public, max-age=86400');
     res.sendFile(path.join(imgDir,name));
   });
+  // Telegram webhook endpoint: authenticated by the secret configured with BotFather's API.
+  // Activate only after migrating to durable storage and setting Telegram's webhook URL.
+  app.post('/api/telegram/webhook', async (req,res)=>{
+    const secretValue=env.TELEGRAM_WEBHOOK_SECRET||'';
+    const received=req.get('X-Telegram-Bot-Api-Secret-Token')||'';
+    if(!secretValue || secretValue.length<32 || received.length!==secretValue.length ||
+       !crypto.timingSafeEqual(Buffer.from(received),Buffer.from(secretValue))){
+      return res.sendStatus(403);
+    }
+    const update=req.body;
+    if(!update || !Number.isSafeInteger(update.update_id) || update.update_id<0){
+      return fail(res,400,'Invalid Telegram update');
+    }
+    try{
+      if(!store.hasUpdate(update.update_id)){
+        await bot.handle(update);
+        store.markUpdate(update.update_id);
+      }
+      res.json({ok:true});
+    }catch(err){
+      console.error('Telegram webhook processing failed:',err.message);
+      res.status(500).json({error:'Telegram update processing failed'});
+    }
+  });
   app.use('/api',requireAdmin);
   app.post('/api/product-image',(req,res)=>{
     try{const {data_url}=req.body||{};if(typeof data_url!=='string')return fail(res,400,'Image required');
