@@ -3,8 +3,10 @@ import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import pg from 'pg';
+import {resolveDatabaseUrl} from '../src/database-url.js';
 
-const url=process.env.DATABASE_URL||process.env.POSTGRES_URL||process.env.NEON_DATABASE_URL;
+let url;
+try {url=resolveDatabaseUrl(process.env);}catch(err){console.error(err.message);process.exitCode=1;}
 if(!url){
   console.error('DATABASE_URL (or POSTGRES_URL/NEON_DATABASE_URL) is required. No changes made.');
   process.exitCode=1;
